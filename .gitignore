@@ -1,1 +1,5 @@
 .DS_Store
+
+# Local secrets - never commit
+src/.env
+
