@@ -65,3 +65,13 @@ variable "disk_size" {
 variable "repositories" {
   type = list(string)
 }
+
+variable "key_name" {
+  description = "Name of the existing AWS key pair for SSH access to the bastion and worker nodes"
+  type        = string
+}
+
+variable "allowed_ssh_cidr" {
+  description = "CIDR block permitted to SSH into the bastion host (e.g. your IP: 203.0.113.5/32)"
+  type        = string
+}

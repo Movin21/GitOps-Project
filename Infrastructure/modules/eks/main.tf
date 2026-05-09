@@ -20,7 +20,35 @@ resource "aws_iam_role_policy_attachment" "cluster_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-# EKS Cluster
+# Security group that restricts EKS API server access to the bastion host only
+
+resource "aws_security_group" "eks_api_access" {
+  name        = "${var.cluster_name}-api-access-sg"
+  description = "Allows HTTPS to the EKS API server from the bastion host only"
+  vpc_id      = var.vpc_id
+
+  ingress {
+    description     = "HTTPS from bastion"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [var.bastion_security_group_id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name      = "${var.cluster_name}-api-access-sg"
+    Terraform = "true"
+  }
+}
+
+# EKS Cluster — private endpoint only, access via bastion
 
 resource "aws_eks_cluster" "eks" {
   name     = var.cluster_name
@@ -28,9 +56,10 @@ resource "aws_eks_cluster" "eks" {
   version  = "1.34"
 
   vpc_config {
-    subnet_ids = var.subnet_ids
-    endpoint_public_access  = true
-    endpoint_private_access = false
+    subnet_ids              = var.subnet_ids
+    security_group_ids      = [aws_security_group.eks_api_access.id]
+    endpoint_private_access = true
+    endpoint_public_access  = false
   }
 
   depends_on = [
@@ -48,7 +77,7 @@ resource "aws_iam_openid_connect_provider" "eks" {
   url             = aws_eks_cluster.eks.identity[0].oidc[0].issuer
 }
 
-# Node Group Role 
+# Node Group Role
 
 resource "aws_iam_role" "eks_node_role" {
   name = "${var.cluster_name}-node-role"
@@ -82,11 +111,10 @@ resource "aws_iam_role_policy_attachment" "ecr_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
 }
 
-
-# Node Group
+# Node Group — SSH access restricted to bastion host only
 
 resource "aws_eks_node_group" "node_group" {
-  cluster_name    = aws_eks_cluster.eks.name 
+  cluster_name    = aws_eks_cluster.eks.name
   node_group_name = var.node_group_name
   node_role_arn   = aws_iam_role.eks_node_role.arn
   subnet_ids      = var.subnet_ids
@@ -105,10 +133,14 @@ resource "aws_eks_node_group" "node_group" {
     max_unavailable = 1
   }
 
-  tags = {
-    Terraform   = "true"
+  remote_access {
+    ec2_ssh_key               = var.key_name
+    source_security_group_ids = [var.bastion_security_group_id]
   }
 
+  tags = {
+    Terraform = "true"
+  }
 
   depends_on = [
     aws_iam_role_policy_attachment.worker_node_policy,
@@ -135,7 +167,6 @@ data "aws_iam_policy_document" "ebs_csi_assume_role" {
     }
   }
 }
-
 
 resource "aws_iam_role" "ebs_csi_irsa" {
   name               = "${var.cluster_name}-ebs-csi-irsa"

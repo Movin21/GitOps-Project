@@ -42,3 +42,9 @@ repositories = [
   "product-service",
   "user-service"
 ]
+
+# Create this key pair in AWS Console (EC2 → Key Pairs) before applying
+key_name = "eks-bastion-key"
+
+# Replace with your public IP (curl ifconfig.me) — use /32 for a single IP
+allowed_ssh_cidr = "0.0.0.0/0"
