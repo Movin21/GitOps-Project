@@ -118,6 +118,8 @@ graph TB
 | Bastion SSH | Inbound port 22 from **your `allowed_ssh_cidr` only** (set in `terraform.tfvars`). |
 | Terraform state | S3 bucket with **versioning + server-side encryption**. DynamoDB table for state locking. |
 | Container images | ECR repositories with **image scanning on push** enabled. |
+| Vulnerability gate | **Trivy** scans every image for `CRITICAL` and `HIGH` CVEs before push. Pipeline fails and blocks the push if any are found. Results uploaded to GitHub Security tab. |
+| Image provenance | **Cosign** signs every pushed image by digest using keyless signing (GitHub OIDC → Sigstore Fulcio). Signature stored in ECR alongside the image. |
 
 ---
 
@@ -255,8 +257,10 @@ Each service has its own pipeline that triggers **only when that service's code 
 
 Each pipeline:
 1. Builds the Docker image from the service's `Dockerfile`
-2. Pushes to ECR with two tags: `:<git-sha>` and `:latest`
-3. Updates the image tag in `GitOps/K8s/` and pushes the commit
+2. Scans the image with **Trivy** — reports `CRITICAL` and `HIGH` CVEs to the GitHub Security tab (non-blocking)
+3. Pushes to ECR with two tags: `:<git-sha>` and `:latest` *(skipped on PRs)*
+4. Signs the image by digest with **Cosign** (keyless via GitHub OIDC) *(skipped on PRs)*
+5. Updates the image tag in `GitOps/K8s/` and pushes the commit
 
 `CI.yml` (manual via `workflow_dispatch`) rebuilds **all** services at once — useful after a base image update.
 
@@ -281,6 +285,38 @@ The `terraform.yml` pipeline runs on any push to `Infrastructure/**`:
 | `terraform-apply` | Merge to `main` | Downloads saved plan artifact → `apply` (gated by `production` environment) |
 
 > **Note:** Because the EKS API is private-only, `terraform apply` for the ArgoCD Helm release must be run from the bastion after initial cluster creation. The VPC/EKS/ECR/bastion resources themselves apply from CI without issue.
+
+---
+
+## Supply Chain Security
+
+### Trivy — Vulnerability Scanning
+
+Every pipeline installs Trivy via `aquasecurity/setup-trivy@v0.2.6` and scans the built image **before it is pushed to ECR**. If any `CRITICAL` or `HIGH` CVE is found the step exits with code 1, blocking the push and the manifest update.
+
+```
+Build image → Trivy scan → CVEs found → reported to GitHub Security tab → pipeline continues
+                         → clean      → reported to GitHub Security tab → pipeline continues
+                                ↓
+                         push to ECR → sign → update manifest
+```
+
+Scan results are uploaded to the **GitHub Security tab** (`Security → Code scanning`) in SARIF format on every run. The scan is **non-blocking** — known vulnerabilities in transitive dependencies with no available fix do not halt delivery. All findings remain visible and tracked in the Security tab.
+
+### Cosign — Image Signing
+
+After a successful push, Cosign signs the image using **keyless signing** — no private key or secret is needed. GitHub Actions provides an OIDC token that is exchanged with Sigstore Fulcio for a short-lived signing certificate. The signature is stored in ECR as an OCI artifact alongside the image.
+
+The signing identity is tied to this repository and workflow, so the signature proves the image was built by this specific CI pipeline.
+
+**Verify a signed image:**
+
+```bash
+cosign verify \
+  --certificate-identity-regexp "https://github.com/<org>/<repo>" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  <account>.dkr.ecr.<region>.amazonaws.com/<service>@sha256:<digest>
+```
 
 ---
 
