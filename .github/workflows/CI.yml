@@ -13,6 +13,7 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -42,13 +43,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Get AWS Account ID
-        id: account
-        run: |
-          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-          echo "id=$ACCOUNT_ID" >> $GITHUB_OUTPUT
-          echo "AWS_ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
 
       - name: Login to Amazon ECR
         run: |
@@ -94,22 +88,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Get AWS Account ID
-        run: |
-          echo "AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_ENV
-
       - name: Update image tags in k8s manifests
         run: |
-          NEW_TAG=$IMAGE_TAG
-          ACCOUNT=$AWS_ACCOUNT_ID
-          REGION=$AWS_REGION
+          NEW_TAG=${{ env.IMAGE_TAG }}
+          ACCOUNT=${{ env.AWS_ACCOUNT_ID }}
+          REGION=${{ env.AWS_REGION }}
 
           for SERVICE in auth gateway orders order-service product-service user-service; do
             MANIFEST="gitops/k8s/backend/${SERVICE}.yml"
@@ -132,5 +115,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add gitops/k8s/
-          git diff --staged --quiet || git commit -m "ci: update image tags to $IMAGE_TAG"
+          git diff --staged --quiet || git commit -m "ci: update image tags to ${{ env.IMAGE_TAG }}"
           git push
