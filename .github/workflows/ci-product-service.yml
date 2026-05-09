@@ -71,7 +71,7 @@ jobs:
 
       - name: Update image tag in k8s manifest
         run: |
-          MANIFEST="GitOps/k8s/backend/$SERVICE.yml"
+          MANIFEST="GitOps/K8s/backend/$SERVICE.yml"
           if [ -f "$MANIFEST" ]; then
             sed -i "s|$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$SERVICE:.*|$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$SERVICE:$IMAGE_TAG|g" "$MANIFEST"
           else

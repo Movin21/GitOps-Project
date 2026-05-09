@@ -95,7 +95,7 @@ jobs:
           REGION=${{ env.AWS_REGION }}
 
           for SERVICE in auth gateway orders order-service product-service user-service; do
-            MANIFEST="GitOps/k8s/backend/${SERVICE}.yml"
+            MANIFEST="GitOps/K8s/backend/${SERVICE}.yml"
             if [ -f "$MANIFEST" ]; then
               sed -i "s|${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${SERVICE}:.*|${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${SERVICE}:${NEW_TAG}|g" "$MANIFEST"
             else
@@ -103,7 +103,7 @@ jobs:
             fi
           done
 
-          FRONTEND_MANIFEST="GitOps/k8s/frontend/deployment.yml"
+          FRONTEND_MANIFEST="GitOps/K8s/frontend/deployment.yml"
           if [ -f "$FRONTEND_MANIFEST" ]; then
             sed -i "s|${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/frontend:.*|${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/frontend:${NEW_TAG}|g" "$FRONTEND_MANIFEST"
           else
