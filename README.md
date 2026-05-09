@@ -1,4 +1,4 @@
-# Boutique E-Commerce Platform — DevOps & AIOps Infrastructure
+# Boutique E-Commerce Platform — GitOps Infrastructure
 
 A production-grade, cloud-native microservices platform deployed on AWS EKS with a fully automated CI/CD pipeline, GitOps-driven continuous delivery via ArgoCD, and secured private infrastructure accessible only through a bastion host.
 
