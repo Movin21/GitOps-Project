@@ -18,8 +18,12 @@ env:
 
 jobs:
   build-and-push:
-    name: Build & Push — ${{ matrix.service }}
+    name: Build, Scan & Push — ${{ matrix.service }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # keyless Cosign signing via GitHub OIDC
+      security-events: write # Trivy SARIF upload to GitHub Security tab
 
     strategy:
       fail-fast: false
@@ -67,12 +71,38 @@ jobs:
             -t $ECR_REPO:latest \
             ${{ steps.ctx.outputs.path }}
 
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/${{ matrix.service }}:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Upload Trivy results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Install Cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3.7.0
+
       - name: Push Docker Image
         if: github.event_name != 'pull_request'
         run: |
           ECR_REPO=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${{ matrix.service }}
           docker push $ECR_REPO:$IMAGE_TAG
           docker push $ECR_REPO:latest
+
+      - name: Sign image with Cosign
+        if: github.event_name != 'pull_request'
+        run: |
+          ECR_REPO=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/${{ matrix.service }}
+          IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $ECR_REPO:$IMAGE_TAG)
+          cosign sign --yes $IMAGE_DIGEST
 
   update-manifests:
     name: Update GitOps Manifests
