@@ -153,7 +153,7 @@ graph TB
 | **Pod → pod** | Network policies: default-deny-all, explicit allow within `boutique` namespace. |
 | **Pod DNS** | Explicit egress allow to kube-system:53 (CoreDNS). |
 | **Terraform state** | S3 with versioning + AES-256 encryption. DynamoDB state locking. |
-| **Container images** | ECR with image scanning on push. Trivy scan in CI. Cosign signatures. |
+| **Container images** | ECR with image scanning on push. Trivy scan in CI. Cosign keyless signatures. |
 | **Route 53** | external-dns manages records automatically from Ingress annotations. |
 
 ---
@@ -163,8 +163,8 @@ graph TB
 ```
 .
 ├── .github/workflows/
-│   ├── terraform.yml            # plan + apply with manual approval gate
-│   ├── CI.yml                   # full rebuild — all services (manual)
+│   ├── terraform.yml            # plan + apply with manual approval gate (production environment)
+│   ├── CI.yml                   # full rebuild — all 7 services (manual trigger)
 │   ├── ci-auth.yml              # per-service: build → Trivy → push → Cosign sign → manifest update
 │   ├── ci-frontend.yml
 │   ├── ci-gateway.yml
@@ -174,35 +174,38 @@ graph TB
 │   └── ci-user-service.yml
 │
 ├── Infrastructure/
-│   ├── backend.tf               # S3 remote state
-│   ├── main.tf                  # root module wiring
-│   ├── provider.tf              # AWS / Kubernetes / Helm providers
+│   ├── backend.tf               # empty S3 backend — values passed via -backend-config in CI
+│   ├── main.tf                  # root module wiring: VPC → bastion → EKS → ECR → route53 → argocd
+│   ├── provider.tf              # AWS ~>5.0, TLS ~>4.0, Kubernetes ~>2.27, Helm ~>2.13
 │   ├── variables.tf
 │   ├── terraform.tfvars
 │   ├── outputs.tf
 │   └── modules/
-│       ├── vpc/                 # VPC, public/private subnets, IGW, NAT, route tables
-│       ├── bastion/             # EC2 bastion + SG
-│       ├── eks/                 # EKS cluster, node group, OIDC, EBS CSI, LBC IRSA, external-dns IRSA
-│       ├── ecr/                 # ECR repositories
-│       ├── argocd/              # ArgoCD, AWS LBC, external-dns, kube-prometheus-stack (Helm)
-│       └── route53/             # Hosted zone
+│       ├── vpc/                 # VPC, 3 public subnets (bastion/NAT/ALB), 3 private subnets (EKS),
+│       │                        # IGW, NAT Gateway + EIP, public + private route tables
+│       ├── bastion/             # EC2 t3.micro (Amazon Linux 2023) + SG (SSH from allowed CIDR only)
+│       ├── eks/                 # EKS 1.34 (private endpoint), node group in private subnets,
+│       │                        # OIDC provider, EBS CSI addon, LBC IRSA role, external-dns IRSA role
+│       ├── ecr/                 # 7 private ECR repositories with scan-on-push
+│       ├── argocd/              # Helm: ArgoCD v6.7.0, AWS LBC v1.7.2, external-dns v1.14.3,
+│       │                        # kube-prometheus-stack v56.21.0
+│       └── route53/             # Hosted zone for your domain
 │
 ├── GitOps/
 │   ├── ArgoCD/
-│   │   └── argo-cd.yml
+│   │   └── argo-cd.yml          # ArgoCD Application — watches path: GitOps on branch: main
 │   ├── K8s/
 │   │   ├── ingress/
-│   │   │   └── ingress.yml      # ALB Ingress — HTTPS, HTTP→HTTPS redirect, external-dns annotation
+│   │   │   └── ingress.yml      # ALB Ingress — internet-facing, HTTPS, HTTP→HTTPS, external-dns annotation
 │   │   ├── network-policies/
-│   │   │   ├── default-deny.yml          # deny all ingress+egress by default
-│   │   │   ├── allow-internal.yml        # allow intra-namespace pod communication
-│   │   │   ├── allow-ingress-controller.yml  # allow ALB → frontend/gateway
-│   │   │   └── allow-dns-egress.yml      # allow CoreDNS queries
-│   │   ├── backend/             # service deployment manifests
-│   │   ├── frontend/
-│   │   └── database/            # MySQL StatefulSet
-│   ├── kustomization.yml
+│   │   │   ├── default-deny.yml          # deny all ingress+egress in boutique namespace
+│   │   │   ├── allow-internal.yml        # allow pod-to-pod within namespace
+│   │   │   ├── allow-ingress-controller.yml  # allow kube-system (ALB) → frontend/gateway :80
+│   │   │   └── allow-dns-egress.yml      # allow all pods → kube-system CoreDNS UDP/TCP :53
+│   │   ├── backend/             # Deployment + Service manifests for all 6 backend services
+│   │   ├── frontend/            # Frontend Deployment + Service
+│   │   └── database/            # MySQL StatefulSet + Service + ConfigMap + restore Job
+│   ├── kustomization.yml        # Lists all resources including network-policies and ingress
 │   ├── namespace.yml
 │   └── secrets.yml
 │
@@ -216,6 +219,8 @@ graph TB
         ├── auth/ · gateway/ · order-service/ · orders/ · product-service/ · user-service/
 ```
 
+> **Path casing matters.** The cluster runs Linux — all GitOps paths use `GitOps/K8s/` (capital G and K). ArgoCD's Application manifest, the kustomization, and CI pipelines all use this exact casing.
+
 ---
 
 ## Infrastructure (Terraform)
@@ -225,24 +230,36 @@ graph TB
 | Layer | CIDR | Contents |
 |---|---|---|
 | VPC | `10.1.0.0/16` | All resources |
-| Public subnets | `10.1.1-3.0/24` | Bastion host, NAT Gateway, internet-facing ALB |
-| Private subnets | `10.1.10-12.0/24` | EKS worker nodes, application pods |
+| Public subnets | `10.1.1.0/24`, `10.1.2.0/24`, `10.1.3.0/24` | Bastion, NAT Gateway, internet-facing ALB |
+| Private subnets | `10.1.10.0/24`, `10.1.11.0/24`, `10.1.12.0/24` | EKS worker nodes, application pods |
 
-Traffic flow:
-- **Inbound:** Internet → IGW → ALB (public subnet) → pods (private subnet via target-type IP)
-- **Outbound:** Pods → NAT Gateway (public subnet) → IGW → Internet (ECR pulls, AWS APIs)
-- **Management:** Developer → Bastion (SSH) → EKS API (private endpoint)
+Traffic flows:
+
+| Direction | Path |
+|---|---|
+| **Inbound** | Internet → IGW → ALB (public) → pods (private, target-type: ip) |
+| **Outbound** | Pods → NAT Gateway (public) → IGW → Internet (ECR pulls, AWS APIs) |
+| **Management** | Developer → Bastion SSH → EKS private API endpoint (bastion SG only) |
 
 ### Terraform Modules
 
-| Module | Resources |
+| Module | Key Resources |
 |---|---|
-| **vpc** | VPC, 3 public subnets, 3 private subnets, IGW, NAT Gateway + EIP, public + private route tables |
-| **bastion** | EC2 `t3.micro` (Amazon Linux 2023), SG (SSH from allowed CIDR only) |
-| **eks** | EKS 1.34 (private endpoint), managed node group in private subnets, OIDC, EBS CSI, LBC IRSA, external-dns IRSA |
-| **ecr** | 7 private repositories with image scanning |
-| **argocd** | ArgoCD v6.7.0, AWS Load Balancer Controller v1.7.2, external-dns v1.14.3, kube-prometheus-stack v56.21.0 |
-| **route53** | Hosted zone for your domain |
+| **vpc** | VPC, 3 public + 3 private subnets, IGW, NAT + EIP, public and private route tables with subnet tags for ALB discovery |
+| **bastion** | EC2 `t3.micro` (Amazon Linux 2023), SG allowing SSH only from `allowed_ssh_cidr` |
+| **eks** | EKS 1.34 (private endpoint only), managed node group in private subnets, OIDC provider, EBS CSI Driver, LBC IRSA, external-dns IRSA |
+| **ecr** | 7 private repositories with image scanning on push |
+| **argocd** | ArgoCD 6.7.0, AWS Load Balancer Controller 1.7.2, external-dns 1.14.3, kube-prometheus-stack 56.21.0 |
+| **route53** | Hosted zone — outputs NS records to set at your registrar |
+
+### Required Providers
+
+| Provider | Version | Used for |
+|---|---|---|
+| `hashicorp/aws` | `~> 5.0` | All AWS resources |
+| `hashicorp/tls` | `~> 4.0` | EKS OIDC thumbprint (`data "tls_certificate"`) |
+| `hashicorp/kubernetes` | `~> 2.27` | Kubernetes namespaces in argocd module |
+| `hashicorp/helm` | `~> 2.13` | Helm releases in argocd module |
 
 ### Before First Apply
 
@@ -277,27 +294,40 @@ domain_name      = "boutique.yourdomain.com"
 | `AWS_SECRET_ACCESS_KEY` | IAM secret key |
 | `AWS_REGION` | `us-east-1` |
 | `AWS_ACCOUNT_ID` | 12-digit AWS account ID |
-| `TF_STATE_BUCKET` | S3 bucket name |
-| `TF_STATE_DYNAMODB_TABLE` | DynamoDB table name |
+| `TF_STATE_BUCKET` | S3 bucket name from Step 1 |
+| `TF_STATE_DYNAMODB_TABLE` | DynamoDB table name from Step 1 |
 
-**Step 5 — Apply order** (EKS private endpoint means argocd module runs from bastion):
+**Step 5 — Apply order:**
+
+The argocd module uses the Kubernetes and Helm providers, which must reach the EKS private API endpoint. GitHub Actions runners cannot, so the module is applied from the bastion after the cluster exists.
+
 ```bash
-# From CI — provisions VPC, EKS, ECR, bastion, Route 53
-terraform apply -target=module.vpc -target=module.bastion \
-                -target=module.eks -target=module.ecr -target=module.route53
+# Phase 1 — from CI (GitHub Actions):
+# Provisions VPC, EKS, ECR, bastion, Route 53
+terraform apply \
+  -target=module.vpc \
+  -target=module.bastion \
+  -target=module.eks \
+  -target=module.ecr \
+  -target=module.route53
 
-# From bastion — deploys cluster add-ons (ArgoCD, LBC, external-dns, Prometheus)
+# Phase 2 — from the bastion:
+# Deploys ArgoCD, AWS LBC, external-dns, and Prometheus stack
 ssh -i eks-bastion-key.pem ec2-user@<bastion-ip>
 aws eks update-kubeconfig --region us-east-1 --name eks-cluster
+cd Infrastructure
 terraform apply -target=module.argocd
 ```
 
-**Step 6 — Point your domain:** after apply, update your registrar NS records:
+**Step 6 — Point your domain:** Add the NS records output by Terraform at your registrar:
 ```bash
 terraform output route53_name_servers
 ```
 
-**Step 7 — ACM Certificate:** request a certificate for your domain in ACM, validate via DNS (Route 53 makes this one click), then paste the ARN into `GitOps/K8s/ingress/ingress.yml`.
+**Step 7 — ACM Certificate:** Request a certificate for your domain in ACM, validate via DNS, then update the ARN in `GitOps/K8s/ingress/ingress.yml`:
+```yaml
+alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/CERT_ID
+```
 
 ---
 
@@ -305,9 +335,9 @@ terraform output route53_name_servers
 
 ### Per-Service Pipelines (GitHub Actions)
 
-Each service triggers independently when its code changes:
+Each service has its own pipeline that triggers only when that service's code changes:
 
-| Pipeline | Trigger |
+| Pipeline | Trigger path |
 |---|---|
 | `ci-auth.yml` | `src/backend/services/auth/**` |
 | `ci-gateway.yml` | `src/backend/services/gateway/**` |
@@ -317,31 +347,34 @@ Each service triggers independently when its code changes:
 | `ci-user-service.yml` | `src/backend/services/user-service/**` |
 | `ci-frontend.yml` | `src/frontend/**` |
 
-Each pipeline:
-1. Builds the Docker image
-2. Scans with **Trivy** — reports CVEs to GitHub Security tab (non-blocking)
-3. Pushes to ECR with `:<git-sha>` and `:latest` tags *(main only)*
-4. Signs the image by digest with **Cosign** keyless signing *(main only)*
-5. Updates `GitOps/K8s/` manifest with new image tag → ArgoCD syncs automatically
+Each pipeline runs these steps in order:
+1. Build Docker image
+2. Scan with **Trivy** — SARIF report uploaded to GitHub Security tab (non-blocking)
+3. Push to ECR with `:<git-sha>` and `:latest` tags *(main branch only)*
+4. Sign by digest with **Cosign** keyless signing *(main branch only)*
+5. Patch `GitOps/K8s/` manifest with new image tag and push commit → ArgoCD detects and syncs
 
 ### GitOps Flow (ArgoCD)
 
 ```
-Code push → CI builds → Trivy scan → push ECR → Cosign sign → update GitOps manifest
-                                                                        ↓
-                                                    ArgoCD detects diff → kubectl apply
-                                                                        ↓
-                                                    LBC updates ALB target groups
-                                                                        ↓
-                                             external-dns updates Route 53 if hostname changed
+Code push
+  → CI: build image → Trivy scan → push ECR → Cosign sign → update GitOps manifest
+                                                                     ↓
+                                               ArgoCD detects diff → kubectl apply
+                                                                     ↓
+                                                      LBC updates ALB target groups
+                                                                     ↓
+                                               external-dns updates Route 53 A record
 ```
+
+ArgoCD watches `path: GitOps` on `branch: main` of the repository. The kustomization at `GitOps/kustomization.yml` lists all resources — workloads, network policies, and the ALB Ingress — and is the single source of truth for cluster state.
 
 ### Terraform Pipeline
 
-| Job | When | Action |
+| Job | Trigger | Action |
 |---|---|---|
-| `terraform-plan` | PR or push | fmt, validate, plan — result posted as PR comment |
-| `terraform-apply` | Merge to main | Downloads saved plan → apply (gated by `production` environment) |
+| `terraform-plan` | PR or push to `Infrastructure/**` | fmt check, validate, plan — result posted as PR comment |
+| `terraform-apply` | Merge to main (plan has changes) | Downloads saved plan → apply, gated by `production` environment approval |
 
 ---
 
@@ -350,14 +383,14 @@ Code push → CI builds → Trivy scan → push ECR → Cosign sign → update G
 ### Trivy — Vulnerability Scanning
 
 ```
-Build → aquasecurity/setup-trivy@v0.2.6 → trivy image --format sarif
+Build → aquasecurity/setup-trivy@v0.2.6 → trivy image --format sarif --exit-code 0
       → Upload SARIF to GitHub Security tab
-      → Pipeline continues regardless (non-blocking — known transitive CVEs)
+      (pipeline continues regardless — known transitive CVEs are acknowledged)
 ```
 
 ### Cosign — Image Signing (Keyless)
 
-After every push, the image is signed by digest using the GitHub Actions OIDC identity — no private key or secret required. The signature is stored in ECR as an OCI artifact.
+Images are signed by digest using the GitHub Actions OIDC identity — no private key or long-lived secret required. The signature is stored in ECR as an OCI artifact alongside the image.
 
 ```bash
 # Verify any image
@@ -373,52 +406,58 @@ cosign verify \
 
 ### Ingress (AWS ALB)
 
-The `GitOps/K8s/ingress/ingress.yml` resource is picked up by the **AWS Load Balancer Controller** which provisions a real ALB in the public subnets. Traffic flow:
+`GitOps/K8s/ingress/ingress.yml` is picked up by the AWS Load Balancer Controller, which provisions an internet-facing ALB in the public subnets. The `external-dns` controller reads the `external-dns.alpha.kubernetes.io/hostname` annotation and creates the Route 53 A record automatically.
 
+Traffic path:
 ```
-Internet → Route 53 → ALB (public subnet, HTTPS:443)
-         → target-type: ip → pods (private subnet, HTTP:80)
+Internet → Route 53 (A record) → ALB (public subnet, HTTPS:443)
+         → target-type: ip → pods in private subnet (HTTP:80)
 ```
 
 Routing rules:
 - `/api/*` and `/auth/*` → `gateway:80`
-- `/*` → `frontend:80`
+- `/*` (catch-all) → `frontend:80`
 
-HTTP → HTTPS redirect is enforced at the ALB listener level.
+HTTP → HTTPS redirect enforced at the ALB listener. TLS terminated at ALB using ACM certificate.
 
 ### Network Policies
 
-| Policy | Effect |
+| Policy file | Effect |
 |---|---|
-| `default-deny.yml` | Deny all ingress and egress in the `boutique` namespace by default |
-| `allow-internal.yml` | Allow pod-to-pod traffic within the namespace (service mesh) |
-| `allow-ingress-controller.yml` | Allow ALB → `frontend` and `gateway` pods |
-| `allow-dns-egress.yml` | Allow all pods to query CoreDNS (UDP/TCP :53) |
+| `default-deny.yml` | Deny all ingress and egress in the `boutique` namespace — nothing works without an explicit allow |
+| `allow-internal.yml` | Allow pod-to-pod communication within the `boutique` namespace (gateway → auth, gateway → product-service, etc.) |
+| `allow-ingress-controller.yml` | Allow traffic from `kube-system` (ALB target-type IP) to `frontend:80` and `gateway:80` |
+| `allow-dns-egress.yml` | Allow all pods to reach CoreDNS on `kube-system` UDP/TCP :53 — required for service discovery |
+
+All four policies must be applied together. ArgoCD applies them as part of the kustomization — they are listed before the workload manifests to ensure the policies are in place before pods start.
 
 ---
 
 ## Connecting to the Cluster
 
-All access goes through the bastion. There is no public EKS API endpoint.
+All access goes through the bastion. The EKS API has no public endpoint.
 
 ```bash
 # SSH to bastion
 ssh -i eks-bastion-key.pem ec2-user@$(terraform output -raw bastion_public_ip)
 
-# Configure kubectl
+# Configure kubectl (run on the bastion)
 aws eks update-kubeconfig --region us-east-1 --name eks-cluster
 
 # Verify
 kubectl get nodes
 kubectl get pods -A
 
-# ArgoCD UI (port-forward + SSH tunnel)
-kubectl port-forward svc/argocd-server -n argocd 8080:80
-# On your laptop: ssh -L 8080:localhost:8080 -i eks-bastion-key.pem ec2-user@<bastion-ip>
+# ArgoCD UI — port-forward on bastion + SSH tunnel to laptop
+kubectl port-forward svc/argocd-server -n argocd 8080:80 &
+# On your laptop:
+ssh -L 8080:localhost:8080 -i eks-bastion-key.pem ec2-user@<bastion-ip>
 # Open: http://localhost:8080
 
 # Grafana UI (same pattern)
-kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
+kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80 &
+ssh -L 3000:localhost:3000 -i eks-bastion-key.pem ec2-user@<bastion-ip>
+# Open: http://localhost:3000  (default login: admin / prom-operator)
 ```
 
 ---
@@ -427,9 +466,9 @@ kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
 
 | Component | Purpose |
 |---|---|
-| **Prometheus** | Scrapes metrics from pods and nodes via `ServiceMonitor` CRDs |
-| **Grafana** | Dashboards — Prometheus pre-provisioned as datasource |
-| **AlertManager** | Alert routing and notification |
+| **Prometheus** | Scrapes metrics from pods via `ServiceMonitor` CRDs and from nodes via node-exporter |
+| **Grafana** | Dashboards — Prometheus pre-provisioned as data source |
+| **AlertManager** | Alert routing and notifications |
 
 ---
 
@@ -437,11 +476,11 @@ kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
 
 | Service | Port | Description |
 |---|---|---|
-| `frontend` | 80 | React/TypeScript storefront (Nginx) |
+| `frontend` | 80 | React/TypeScript storefront served by Nginx |
 | `gateway` | 80 | API Gateway — single entry point for all backend calls |
 | `auth` | 3002 | JWT authentication and authorisation |
 | `user-service` | — | User profile management |
 | `product-service` | — | Product catalogue |
 | `order-service` | — | Order creation |
 | `orders` | — | Order query service |
-| `mysql` | 3306 | MySQL StatefulSet with EBS persistent volume |
+| `mysql` | 3306 | MySQL StatefulSet backed by EBS persistent volume |
