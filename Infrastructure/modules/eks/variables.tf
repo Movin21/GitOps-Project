@@ -8,8 +8,8 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "subnet_ids" {
-  description = "List of subnet IDs where nodes will be deployed"
+variable "private_subnet_ids" {
+  description = "Private subnet IDs for EKS control plane ENIs and worker nodes"
   type        = list(string)
 }
 
@@ -19,43 +19,45 @@ variable "node_group_name" {
 }
 
 variable "instance_types" {
-  description = "List of EC2 instance types for worker nodes"
+  description = "EC2 instance types for worker nodes"
   type        = list(string)
 }
 
 variable "capacity_type" {
-  description = "Type of capacity for nodes (ON_DEMAND or SPOT)"
+  description = "ON_DEMAND or SPOT"
   type        = string
   default     = "ON_DEMAND"
 }
 
 variable "desired_size" {
-  description = "Desired number of worker nodes"
-  type        = number
+  type = number
 }
 
 variable "min_size" {
-  description = "Minimum number of worker nodes"
-  type        = number
+  type = number
 }
 
 variable "max_size" {
-  description = "Maximum number of worker nodes"
-  type        = number
+  type = number
 }
 
 variable "disk_size" {
-  description = "Disk size in GiB for worker nodes"
+  description = "Root volume size in GiB for worker nodes"
   type        = number
   default     = 20
 }
 
 variable "bastion_security_group_id" {
-  description = "Security group ID of the bastion host — granted HTTPS access to the EKS API and SSH access to nodes"
+  description = "Bastion SG — granted HTTPS to EKS API and SSH to nodes"
   type        = string
 }
 
 variable "key_name" {
-  description = "AWS key pair name for SSH access to worker nodes via the bastion host"
+  description = "EC2 key pair for SSH access to nodes via bastion"
+  type        = string
+}
+
+variable "domain_name" {
+  description = "Domain name used for external-dns Route 53 filtering"
   type        = string
 }

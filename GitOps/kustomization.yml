@@ -6,22 +6,29 @@ namespace: boutique
 resources:
   - namespace.yml
   - secrets.yml
-  - k8s/database/statefulset.yml
-  - k8s/database/service.yml
-  - k8s/backend/gateway.yml
-  - k8s/backend/service-monitor.yml
-  - k8s/backend/auth.yml
-  - k8s/backend/product-service.yml
-  - k8s/backend/order-service.yml
-  - k8s/backend/orders.yml
-  - k8s/backend/user-service.yml
-  - k8s/frontend/deployment.yml
-  - k8s/grafana-dashboard.yml
+  - K8s/database/statefulset.yml
+  - K8s/database/service.yml
+  - K8s/backend/gateway.yml
+  - K8s/backend/service-monitor.yml
+  - K8s/backend/auth.yml
+  - K8s/backend/product-service.yml
+  - K8s/backend/order-service.yml
+  - K8s/backend/orders.yml
+  - K8s/backend/user-service.yml
+  - K8s/frontend/deployment.yml
+  - K8s/grafana-dashboard.yml
+  # Network policies — applied before workloads
+  - K8s/network-policies/default-deny.yml
+  - K8s/network-policies/allow-internal.yml
+  - K8s/network-policies/allow-ingress-controller.yml
+  - K8s/network-policies/allow-dns-egress.yml
+  # ALB Ingress
+  - K8s/ingress/ingress.yml
 
 configMapGenerator:
   - name: boutique-db-dump
     files:
-      - k8s/database/boutique_full.sql
+      - K8s/database/boutique_full.sql
 
 generatorOptions:
   disableNameSuffixHash: true

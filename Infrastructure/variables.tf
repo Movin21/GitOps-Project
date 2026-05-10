@@ -1,77 +1,88 @@
 variable "region" {
-  description="The name of the region"
-  type = string
+  description = "AWS region"
+  type        = string
 }
 
 variable "vpc_name" {
   description = "VPC name"
-  type = string
+  type        = string
 }
 
 variable "vpc_cidr" {
-  description = "VPC CIDR Value"
-  type = string
+  description = "VPC CIDR block"
+  type        = string
 }
 
-variable "subnets" {
-  description = "List of subnets"
+variable "public_subnets" {
+  description = "Public subnets — bastion, NAT gateway, internet-facing ALB"
   type = list(object({
-    name                      = string
-    cidr_block                = string
-    availability_zone         = string
+    name              = string
+    cidr_block        = string
+    availability_zone = string
   }))
 }
 
+variable "private_subnets" {
+  description = "Private subnets — EKS worker nodes and application pods"
+  type = list(object({
+    name              = string
+    cidr_block        = string
+    availability_zone = string
+  }))
+}
 
 variable "cluster_name" {
-  description = "The name of the Kubernetes Cluster"
-  type = string
+  description = "EKS cluster name"
+  type        = string
 }
 
 variable "node_group_name" {
-  type        = string
   description = "EKS node group name"
+  type        = string
 }
 
 variable "instance_types" {
+  description = "EC2 instance types for worker nodes"
   type        = list(string)
-  description = "Instance types for worker nodes (t3.medium, t3.large)"
 }
 
 variable "capacity_type" {
-  type        = string
   description = "ON_DEMAND or SPOT"
+  type        = string
 }
 
 variable "desired_size" {
-  type        = number
-  description = "Desired number of worker nodes"
+  type = number
 }
 
 variable "min_size" {
-  type        = number
-  description = "Minimum number of  worker nodes"
+  type = number
 }
 
 variable "max_size" {
-  type        = number
-  description = "Maximum number of worker nodes"
+  type = number
 }
 
 variable "disk_size" {
-  type        = number
+  type = number
 }
 
 variable "repositories" {
-  type = list(string)
+  description = "ECR repository names (one per microservice)"
+  type        = list(string)
 }
 
 variable "key_name" {
-  description = "Name of the existing AWS key pair for SSH access to the bastion and worker nodes"
+  description = "AWS key pair name for bastion and node SSH access"
   type        = string
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR block permitted to SSH into the bastion host (e.g. your IP: 203.0.113.5/32)"
+  description = "CIDR permitted to SSH into the bastion (your IP — curl ifconfig.me)"
+  type        = string
+}
+
+variable "domain_name" {
+  description = "Root domain for Route 53 hosted zone and external-dns (e.g. boutique.example.com)"
   type        = string
 }

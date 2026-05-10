@@ -21,3 +21,18 @@ output "node_group_arn" {
 output "node_group_status" {
   value = aws_eks_node_group.node_group.status
 }
+
+output "lbc_role_arn" {
+  description = "IAM role ARN for the AWS Load Balancer Controller service account"
+  value       = aws_iam_role.lbc.arn
+}
+
+output "external_dns_role_arn" {
+  description = "IAM role ARN for the external-dns service account"
+  value       = aws_iam_role.external_dns.arn
+}
+
+output "oidc_provider_arn" {
+  description = "OIDC provider ARN for IRSA"
+  value       = aws_iam_openid_connect_provider.eks.arn
+}

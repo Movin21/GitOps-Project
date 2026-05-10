@@ -1,0 +1,58 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: boutique-ingress
+  namespace: boutique
+  annotations:
+    # AWS Load Balancer Controller — creates an internet-facing ALB
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # HTTPS redirect — HTTP:80 → HTTPS:443
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+
+    # ACM certificate ARN — replace with your certificate ARN
+    # aws acm list-certificates --region us-east-1
+    alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/CERT_ID
+
+    # Health check settings
+    alb.ingress.kubernetes.io/healthcheck-path: /health
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: '30'
+    alb.ingress.kubernetes.io/success-codes: '200,301'
+
+    # external-dns picks this up and creates the Route 53 record automatically
+    external-dns.alpha.kubernetes.io/hostname: boutique.example.com
+
+spec:
+  rules:
+    - host: boutique.example.com
+      http:
+        paths:
+          # API — routed to the gateway service
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 80
+
+          # Auth endpoints
+          - path: /auth
+            pathType: Prefix
+            backend:
+              service:
+                name: gateway
+                port:
+                  number: 80
+
+          # Frontend — catch-all
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80

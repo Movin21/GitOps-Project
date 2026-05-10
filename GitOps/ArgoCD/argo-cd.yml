@@ -8,7 +8,7 @@ spec:
   source:
     repoURL: 'https://github.com/Movin21/DevOps-AIOps-Project.git'
     targetRevision: main
-    path: gitops
+    path: GitOps
   destination:
     server: 'https://kubernetes.default.svc'
     namespace: boutique

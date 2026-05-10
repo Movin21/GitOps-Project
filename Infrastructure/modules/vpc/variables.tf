@@ -1,20 +1,29 @@
 variable "vpc_name" {
-  type = string
+  description = "Name tag for the VPC and derived resources"
+  type        = string
 }
 
 variable "cidr_block" {
-  type = string
+  description = "CIDR block for the VPC"
+  type        = string
 }
 
 variable "availability_zones" {
-  type = list(string)
+  description = "List of availability zones (must match length of subnet CIDR lists)"
+  type        = list(string)
 }
 
-variable "subnet_cidrs" {
-  type = list(string)
+variable "public_subnet_cidrs" {
+  description = "CIDR blocks for public subnets — one per AZ (bastion, NAT, ALB)"
+  type        = list(string)
+}
+
+variable "private_subnet_cidrs" {
+  description = "CIDR blocks for private subnets — one per AZ (EKS nodes, pods)"
+  type        = list(string)
 }
 
 variable "cluster_name" {
-  description = "EKS cluster name for subnet tagging"
+  description = "EKS cluster name used for subnet discovery tags"
   type        = string
 }

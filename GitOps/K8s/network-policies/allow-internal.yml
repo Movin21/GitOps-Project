@@ -1,0 +1,18 @@
+# Allow all pods within the boutique namespace to talk to each other.
+# Services communicate internally (e.g. gateway → auth, gateway → product-service).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: boutique
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}

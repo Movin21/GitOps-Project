@@ -1,11 +1,12 @@
 module "vpc" {
   source = "./modules/vpc"
 
-  vpc_name           = var.vpc_name
-  cidr_block         = var.vpc_cidr
-  subnet_cidrs       = [for s in var.subnets : s.cidr_block]
-  availability_zones = [for s in var.subnets : s.availability_zone]
-  cluster_name       = var.cluster_name
+  vpc_name             = var.vpc_name
+  cidr_block           = var.vpc_cidr
+  availability_zones   = [for s in var.public_subnets : s.availability_zone]
+  public_subnet_cidrs  = [for s in var.public_subnets : s.cidr_block]
+  private_subnet_cidrs = [for s in var.private_subnets : s.cidr_block]
+  cluster_name         = var.cluster_name
 }
 
 module "bastion" {
@@ -13,7 +14,7 @@ module "bastion" {
 
   cluster_name     = var.cluster_name
   vpc_id           = module.vpc.vpc_id
-  subnet_id        = module.vpc.subnet_ids[0]
+  subnet_id        = module.vpc.public_subnet_ids[0]
   key_name         = var.key_name
   allowed_ssh_cidr = var.allowed_ssh_cidr
 
@@ -26,7 +27,7 @@ module "eks" {
   cluster_name    = var.cluster_name
   node_group_name = var.node_group_name
   vpc_id          = module.vpc.vpc_id
-  subnet_ids      = module.vpc.subnet_ids
+  private_subnet_ids = module.vpc.private_subnet_ids
 
   instance_types = var.instance_types
   min_size       = var.min_size
@@ -36,6 +37,7 @@ module "eks" {
 
   bastion_security_group_id = module.bastion.bastion_security_group_id
   key_name                  = var.key_name
+  domain_name               = var.domain_name
 
   depends_on = [module.vpc, module.bastion]
 }
@@ -46,12 +48,17 @@ module "ecr" {
   repositories = var.repositories
 }
 
-# NOTE: The kubernetes and helm providers below reach the EKS API.
-# With a private endpoint, these only work when Terraform is run from
-# within the VPC (e.g. from the bastion). Run the initial ArgoCD
-# bootstrap from the bastion after the cluster is up:
-#   aws eks update-kubeconfig --region <region> --name <cluster>
-#   helm install argo-cd ...
+module "route53" {
+  source = "./modules/route53"
+
+  domain_name = var.domain_name
+}
+
+# ── Kubernetes / Helm providers ───────────────────────────────────────────────
+# NOTE: These providers reach the EKS private API endpoint.
+# Run: terraform apply -target=module.vpc -target=module.bastion -target=module.eks -target=module.ecr
+# Then SSH to the bastion, run aws eks update-kubeconfig, and apply from there
+# for the argocd module which uses these providers.
 
 data "aws_eks_cluster_auth" "eks" {
   name = module.eks.cluster_name
@@ -66,7 +73,6 @@ provider "kubernetes" {
 
 provider "helm" {
   alias = "eks"
-
   kubernetes = {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
@@ -81,6 +87,13 @@ module "argocd" {
     kubernetes = kubernetes.eks
     helm       = helm.eks
   }
+
+  cluster_name          = var.cluster_name
+  vpc_id                = module.vpc.vpc_id
+  aws_region            = var.region
+  lbc_role_arn          = module.eks.lbc_role_arn
+  external_dns_role_arn = module.eks.external_dns_role_arn
+  domain_name           = var.domain_name
 
   depends_on = [module.eks]
 }
